@@ -3,10 +3,10 @@
 export user_clean=$(cat ~/.okta_aws_login_config | grep okta_username | awk '{ print $3; }')
 
 # START USAGE DOCUMENTATION
-# assume-role-okta is a command line tool to help assume roles through a bastion account.
+# okta is a command line tool to help assume roles through a bastion account.
 # Store your bastion account credentials here ~/.aws/credentials
 #
-# Usage: assume-role-okta [account_name] [role] [aws-region]
+# Usage: okta [account_name] [role] [aws-region]
 # account_name          account id or alias
 #                       aliases stored in ~/.aws/accounts as JSON {"alias": account_id}
 #                       [default 'default']
@@ -33,7 +33,7 @@ echo_out() {
   fi
 }
 
-assume-role-okta(){
+okta(){
   # exports
   export AWS_SESSION_START
   export AWS_SESSION_ACCESS_KEY_ID
@@ -299,7 +299,7 @@ EOF
     echo_out "No EKS Cluster found. ignoring ..."
   fi
 
-  # OUTPUTS ALL THE EXPORTS for eval $(assume-role-okta [args])
+  # OUTPUTS ALL THE EXPORTS for eval $(okta [args])
   if [ "$OUTPUT_TO_EVAL" = "true" ]; then
     echo "export AWS_REGION=\"$AWS_REGION\";"
     echo "export AWS_DEFAULT_REGION=\"$AWS_DEFAULT_REGION\";"
@@ -342,12 +342,12 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   : # noop
 elif [[ "init" == "${1}" ]]; then
   # TODO: This will be multi-shell support like rbenv, e.g. fish
-  # Supports `eval "$(assume-role-okta init -)"` in rc file
+  # Supports `eval "$(okta init -)"` in rc file
   echo "Currently not supported"
 else
   # The script is being called directly
-  # Supports calling being called like eval $(assume-role-okta account role [token])
+  # Supports calling being called like eval $(okta account role [token])
   set -eo pipefail
   OUTPUT_TO_EVAL="true"
-  assume-role-okta "$@";
+  okta "$@";
 fi
