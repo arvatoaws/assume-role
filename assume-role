@@ -126,8 +126,8 @@ EOF
 
   # DEFAULT VARIABLES
   CONF_FILE=${CONF_FILE:-~/.aws/config}
-  CREDENTIAL_FILE="~/.aws/credentials"
-  OKTA_CONFIG=${OKTA_CONFIG:-~/.okta_aws_login_config}
+  CREDENTIAL_FILE="$HOME/.aws/credentials"
+  OKTA_CONFIG=${OKTA_CONFIG:-$HOME/.okta_aws_login_config}
   SESSION_TIMEOUT=43200
   ROLE_SESSION_TIMEOUT=3600
   DEFAULT_ACCOUNT="default"
@@ -135,18 +135,20 @@ EOF
   AWS_PAGER=${AWS_PAGER:-cat}
 
   use_okta_auth() {
-  if [ -f -a "$OKTA_CONFIG" ]; then
-    SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
-    echo $SOURCE_PROFILE
-    ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
-    is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token" | wc -l `
-    if [ $is_temporary -eq "1" ]; then
-      return 0
+    if [ -f -a "$OKTA_CONFIG" ]; then
+      SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
+      echo $SOURCE_PROFILE
+      ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
+      is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token" | wc -l`
+      if [ $is_temporary -eq "1" ]; then
+        return 0
+      else
+        return 1
+      fi
+    else
+      return 1
     fi
-  else
-    return 1
-  fi
-}
+  }
 
   # Force use of ~/.aws/credentials file which contains aws login account
   unset AWS_ACCESS_KEY_ID
@@ -158,13 +160,7 @@ EOF
   # SETUP
   #######
 
-  if !use_okta_auth; then
-    export user_clean=$(printf '%s' $USER | tr -d '\\')
-    # echo_out "no okta"
-  else
-    export user_clean=$(cat ~/.okta_aws_login_config | grep okta_username | awk '{ print $3; }')
-    echo_out "${CYAN}Using Okta for assuming ...${NC}"
-  fi
+
 
   # load default assume-role profile if available, use "default" otherwise
   if [ "$AWS_PROFILE_ASSUME_ROLE" ]; then
@@ -300,7 +296,7 @@ EOF
 
   if [ "$ROLE_SESSION_TIMEOUT" -gt 3600 ] || [ "$ABOUT_SESSION_TIMEOUT" -lt "$SESSION_TIMEOUT_DELTA" ]; then
 
-    if !use_okta_auth; then
+    if [ ! use_okta_auth ]; then
 
       # We'll need a token to renew session
       if [ -z "$mfa_token_input" ] && [ -z "$OUTPUT_TO_EVAL" ] && [ -z "$YUBIKEY_ASSUME_KEY" ]; then
@@ -376,6 +372,14 @@ EOF
     fi
   fi
 
+  if use_okta_auth; then
+    export user_clean=$(cat $OKTA_CONFIG | grep okta_username | awk '{ print $3; }')
+    echo_out "${CYAN}Using Okta for assuming ...${NC}"
+  else
+    export user_clean=$(printf '%s' $USER | tr -d '\\')
+    # echo_out "no okta"
+  fi
+
   # Now drop into a role using session token's long-lived MFA
   ROLE_SESSION_ARGS=(--role-arn "${role_arn}")
   ROLE_SESSION_ARGS+=(--profile "${source_profile_config}")
@@ -386,10 +390,7 @@ EOF
   ROLE_SESSION=$(aws sts assume-role "${ROLE_SESSION_ARGS[@]}" --output json || echo "fail")
 
   if [ "$ROLE_SESSION" = "fail" ]; then
-    if !use_okta_auth; then
-      echo_out "${RED}Failed to export session envars.${NC}"
-      unset AWS_SESSION_START
-    else
+    if use_okta_auth; then
       echo_out "${YELLOW}Failed to export session envars. Executing gimme-aws-creds${NC}"
       if [ ! -z "$YUBIKEY_OKTA_KEY" ]; then
         OKTA_MFA_CODE=$(ykman oath code "$YUBIKEY_OKTA_KEY" | awk '{print $NF}')
@@ -420,6 +421,9 @@ EOF
         export AWS_STS_ROLE_ARN="$role_arn"
         echo "${GREEN}\uf65f switched role${NC}"
       fi
+    else
+      echo_out "${RED}Failed to export session envars.${NC}"
+      unset AWS_SESSION_START
     fi
   else
     export AWS_ACCESS_KEY_ID=$(echo "$ROLE_SESSION" | jq -r .Credentials.AccessKeyId)
