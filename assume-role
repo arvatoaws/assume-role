@@ -62,7 +62,7 @@ eks_menu ()
 use_okta_auth() {
   if [ -f -a "$OKTA_CONFIG" ]; then
     SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
-    echo $SOURCE_PROFILE
+    #echo $SOURCE_PROFILE
     ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
     is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token" | wc -l`
     if [ $is_temporary -eq "1" ]; then
