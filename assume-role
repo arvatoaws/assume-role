@@ -35,6 +35,46 @@ echo_out() {
   fi
 }
 
+eks_menu ()
+  {
+    arrsize=$1
+    # echo "Size of array: $arrsize"
+    # echo_out "${@:2}"
+    select option in "${@:2}"; do
+      if [ "$REPLY" -gt "$arrsize" ];
+      then
+        echo_out "Exiting..."
+        break;
+      elif [ 1 -le "$REPLY" ] && [ "$REPLY" -le $((arrsize)) ];
+      then
+        # echo "You selected $option which is option $REPLY"
+        echo_out "${BLUE}\ufd31 Switch to $option${NC}"
+        export KUBECONFIG="$HOME/.kube/$AWS_ACCOUNT_ID-$option"
+        aws eks update-kubeconfig --name $option --alias $option
+        chmod 0600 $KUBECONFIG
+        break;
+      else
+        echo_out "Incorrect Input: Select a number 1-$arrsize"
+      fi
+    done
+  }
+
+use_okta_auth() {
+  if [ -f -a "$OKTA_CONFIG" ]; then
+    SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
+    echo $SOURCE_PROFILE
+    ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
+    is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token" | wc -l`
+    if [ $is_temporary -eq "1" ]; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    return 1
+  fi
+}
+
 assume-role(){
   #######
   # PRE-CONDITIONS
@@ -97,7 +137,7 @@ EOF
         ;;
       h)
         echo "$HELP"
-        exit 1
+        break
         ;;
       \?)
         invalid_options+=($OPTARG)
@@ -116,7 +156,7 @@ EOF
     done
     echo "" >&2
     echo "$HELP" >&2
-    exit 1
+    break
   fi
 
   # SET $1 TO FIRST MASS ARGUMENT, $2 TO SECOND MASS ARGUMENT ETC
@@ -133,22 +173,7 @@ EOF
   DEFAULT_ACCOUNT="default"
   DEFAULT_ROLE="read"
   AWS_PAGER=${AWS_PAGER:-cat}
-
-  use_okta_auth() {
-    if [ -f -a "$OKTA_CONFIG" ]; then
-      SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
-      echo $SOURCE_PROFILE
-      ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
-      is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token" | wc -l`
-      if [ $is_temporary -eq "1" ]; then
-        return 0
-      else
-        return 1
-      fi
-    else
-      return 1
-    fi
-  }
+  default_profile=${AWS_PROFILE_ASSUME_ROLE:-default}
 
   # Force use of ~/.aws/credentials file which contains aws login account
   unset AWS_ACCESS_KEY_ID
@@ -159,16 +184,6 @@ EOF
   #######
   # SETUP
   #######
-
-
-
-  # load default assume-role profile if available, use "default" otherwise
-  if [ "$AWS_PROFILE_ASSUME_ROLE" ]; then
-    # echo "Using assume-role default profile: $AWS_PROFILE_ASSUME_ROLE"
-    default_profile=${AWS_PROFILE_ASSUME_ROLE}
-  else
-    default_profile="default"
-  fi
 
   # load user-set ROLE_SESSION_TIMEOUT (up to 12h, 43200 seconds), use default 1h defined above otherwise
   if [ "$AWS_ROLE_SESSION_TIMEOUT" ]; then
@@ -211,7 +226,8 @@ EOF
         role_input=`cat $CONF_FILE | grep "$account_id" | awk '{print $3 }' | awk -F'/' '{ print $2 }'`
         account_name=`tac ~/.aws/config | grep -B 20 "$account_id" | grep "\[profile" | sed "s/\]$//" | awk '{print $2 }' | head -n1`
       else
-        echo_out "Account-ID not found or multiple"
+        echo_out "${RED}Account-ID not found or multiple${NC}"
+        break
       fi
     fi
     # echo_out $role_input, $account_id
@@ -277,7 +293,7 @@ EOF
 
   # set external ID
   AWS_CONFIG_EXTERNAL_ID="$(aws configure get external_id --profile ${account_name})"
-  if [ ! -z "$AWS_CONFIG_EXTERNAL_ID" ]; then
+  if [ "$AWS_CONFIG_EXTERNAL_ID" ]; then
     # echo_out "External ID from config $AWS_CONFIG_EXTERNAL_ID"
     external_id="$AWS_CONFIG_EXTERNAL_ID"
   else
@@ -444,30 +460,6 @@ EOF
   eks_clusters=$(aws eks list-clusters --query 'clusters[*]' --output text)
   #count_clusters=$(echo -n "$eks_clusters" | grep -c '^')
   cluster_array=($(echo $eks_clusters | tr "\t" "\n"))
-
-  eks_menu ()
-  {
-    arrsize=$1
-    # echo "Size of array: $arrsize"
-    # echo_out "${@:2}"
-    select option in "${@:2}"; do
-      if [ "$REPLY" -gt "$arrsize" ];
-      then
-        echo_out "Exiting..."
-        break;
-      elif [ 1 -le "$REPLY" ] && [ "$REPLY" -le $((arrsize)) ];
-      then
-        # echo "You selected $option which is option $REPLY"
-        echo_out "${BLUE}\ufd31 Switch to $option${NC}"
-        export KUBECONFIG="$HOME/.kube/$AWS_ACCOUNT_ID-$option"
-        aws eks update-kubeconfig --name $option --alias $option
-        chmod 0600 $KUBECONFIG
-        break;
-      else
-        echo_out "Incorrect Input: Select a number 1-$arrsize"
-      fi
-    done
-  }
 
   if [ ${#cluster_array[@]} -eq 1 ]; then
     echo_out "${BLUE}\ufd31 Switch to $eks_clusters${NC}"
