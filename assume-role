@@ -97,7 +97,7 @@ EOF
         ;;
       h)
         echo "$HELP"
-        exit 1
+        break
         ;;
       \?)
         invalid_options+=($OPTARG)
