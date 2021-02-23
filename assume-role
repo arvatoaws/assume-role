@@ -199,7 +199,7 @@ EOF
       source_profile_config=`aws configure get source_profile --profile $account_name || echo ''`
       if [ ! -z "$source_profile_config" ] && [ "$source_profile_config" != '' ]; then
         echo_out "Using source profile $source_profile_config"
-        default_profile=$source_profile_config
+        default_profile=$source_profile_config #FIXME use source profile from config profile - default should only be a fallback
       fi
     else
       account_id="$account_name_input"
@@ -376,6 +376,7 @@ EOF
     export user_clean=$(cat $OKTA_CONFIG | grep okta_username | awk '{ print $3; }')
     echo_out "${CYAN}Using Okta for assuming ...${NC}"
   else
+    # TODO set user name from mfa device
     export user_clean=$(printf '%s' $USER | tr -d '\\')
     # echo_out "no okta"
   fi
