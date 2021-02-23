@@ -137,7 +137,7 @@ EOF
         ;;
       h)
         echo "$HELP"
-        break
+        return
         ;;
       \?)
         invalid_options+=($OPTARG)
@@ -156,7 +156,7 @@ EOF
     done
     echo "" >&2
     echo "$HELP" >&2
-    break
+    return
   fi
 
   # SET $1 TO FIRST MASS ARGUMENT, $2 TO SECOND MASS ARGUMENT ETC
@@ -227,7 +227,7 @@ EOF
         account_name=`tac ~/.aws/config | grep -B 20 "$account_id" | grep "\[profile" | sed "s/\]$//" | awk '{print $2 }' | head -n1`
       else
         echo_out "${RED}Account-ID not found or multiple${NC}"
-        break
+        return
       fi
     fi
     # echo_out $role_input, $account_id
