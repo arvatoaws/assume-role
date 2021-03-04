@@ -1,0 +1,185 @@
+#!/bin/bash# Colors
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+use_okta_auth() {
+  if [ -f -a "$OKTA_CONFIG" ]; then
+    SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
+    #echo $SOURCE_PROFILE
+    ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
+    is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token"`
+    if [ $is_temporary ]; then
+      true
+    else
+      false
+    fi
+  else
+    false
+  fi
+}
+
+check_account_input() {
+  if cat $CONF_FILE | grep -q "\[profile $1\]"; then
+    export AWS_ACCOUNT_NAME=$1
+  elif cat $CONF_FILE | grep -q "$account_id"; then
+    echo_out "Account-ID: $1"
+    export AWS_ACCOUNT_NAME=`tac $CONF_FILE | grep -A 20 "$1" | grep "\[profile" | sed "s/\]$//" | awk '{print $2 }' | head -n1`
+  else
+    echo_out "Account wasn't found in config"
+    return
+  fi
+}
+
+echo_out() {
+  if [ -z "$silent" ]; then
+    # If this is outputting to an eval statement we need to output a "echo" as well
+    if [ -z "$OUTPUT_TO_EVAL" ]; then
+      echo "$@"
+    else
+      echo "echo \"$*\";"
+    fi
+  fi
+}
+
+get_account_name() {
+  # manual input
+  # check Input, if account_name or ID
+  if [ $1 ]; then
+    check_account_input $1
+  # ask for account
+  else
+    if [ -z "$AWS_ACCOUNT_NAME" ] && AWS_ACCOUNT_NAME=$DEFAULT_ACCOUNT
+    echo -n "Assume Into Account [$AWS_ACCOUNT_NAME]: "
+    read -r assume_input
+    assume_input=${assume_input:-"$AWS_ACCOUNT_NAME"}
+    check_account_input $assume_input
+  fi
+  export AWS_ACCOUNT_NAME
+}
+
+get_account_infos_from_config() {
+  role_arn=$(aws configure get role_arn --profile $AWS_ACCOUNT_NAME)
+  mfa_serial=$(aws configure get mfa_serial --profile $AWS_ACCOUNT_NAME)
+  mfa_user=$(echo "$mfa_serial" | awk -F':' '{ print $6 }' | awk -F'/' '{ print $2 }')
+  source_profile=$(aws configure get source_profile --profile $AWS_ACCOUNT_NAME)
+  account_id=`cat $CONF_FILE | sed -n "/^\[profile $account_name\]/,/^\[.*\]/p" | grep "role_arn" | awk '{ print $3 }' | awk -F':' '{ print $5 }'`
+  config_region=$(aws configure get region --profile $AWS_ACCOUNT_NAME)
+  external_id=$(aws configure get external_id --profile $AWS_ACCOUNT_NAME)
+}
+
+set_mfa() {
+  if [ use_okta_auth ]; then
+    echo_out "TODO set_mfa"
+  else
+    if [ -z "$mfa_serial" ]; then
+      # get MFA device attached to default creds
+      MFA_DEVICE=$(aws iam list-mfa-devices --user-name "$AWS_USERNAME" --query 'MFADevices[0].SerialNumber' --profile "${default_profile}" --output text)
+      MFA_DEVICE_STATUS=$?
+      if [ $MFA_DEVICE_STATUS -ne 0 ]; then
+        echo_out "aws iam list-mfa-devices error"
+        return
+      fi
+    else
+      MFA_DEVICE=$mfa_serial
+    fi
+
+    if [ -z "$mfa_token_input" ] && [ -z "$YUBIKEY_ASSUME_KEY" ]; then
+      echo -n "MFA Token: "
+      read -r mfa_token
+    elif [ -z "$mfa_token_input" ] && [ -z "$OUTPUT_TO_EVAL" ]; then
+      YUBIKEY_MFA=$(ykman oath code "$YUBIKEY_ASSUME_KEY" | awk '{print $NF}')
+      echo_out "Using MFA-Key $YUBIKEY_MFA"
+      mfa_token="$YUBIKEY_MFA"
+    else
+      mfa_token="$mfa_token_input"
+    fi
+  fi
+}
+
+set_session_user() {
+  if [ use_okta_auth ]; then
+    export session_user=$(cat $OKTA_CONFIG | grep okta_username | awk '{ print $3; }')
+  elif [ $mfa_user ]; then
+    export session_user=$mfa_user
+  else
+    export session_user=$(printf '%s' $USER | tr -d '\\')
+  fi
+}
+
+set_region() {
+  if [[ -z $config_region && -z $AWS_REGION && -z $AWS_DEFAULT_REGION ]]; then
+    echo -n "Assume Into Region [us-east-1]: "
+    read -r region
+    region=${region:-"us-east-1"}
+  elif [ "$config_region" ]; then
+    echo_out "Region from config $config_region"
+    region="$config_region"
+  elif [ $AWS_REGION ]; then
+    echo_out "Region from ENV \$AWS_REGION"
+    region="$AWS_REGION"
+  elif [ "$AWS_DEFAULT_REGION" ]; then
+    echo_out "Region from ENV \$AWS_DEFAULT_REGION"
+    region="$AWS_DEFAULT_REGION"
+  fi
+  export AWS_REGION="$region"
+  export AWS_DEFAULT_REGION="$region"
+}
+
+set_eks_kubeconfig() {
+  # Switch to EKS Cluster
+  eks_clusters=$(aws eks list-clusters --query 'clusters[*]' --output text)
+  #count_clusters=$(echo -n "$eks_clusters" | grep -c '^')
+  cluster_array=($(echo $eks_clusters | tr "\t" "\n"))
+
+  if [ ${#cluster_array[@]} -eq 1 ]; then
+    echo_out "${BLUE}\ufd31 Switch to $eks_clusters${NC}"
+    export KUBECONFIG="$HOME/.kube/$AWS_ACCOUNT_ID-$eks_clusters"
+    aws eks update-kubeconfig --name $eks_clusters --alias $eks_clusters
+    chmod 0600 $KUBECONFIG
+  elif [ ${#cluster_array[@]} -gt 1 ]; then
+    echo_out "More than one EKS Cluster found. Select:"
+    eks_menu "${#cluster_array[@]}" "${cluster_array[@]}"
+  else
+    echo_out "No EKS Cluster found. ignoring ..."
+  fi
+}
+
+test_assume() {
+  # DEFAULT VARIABLES
+  CONF_FILE=${CONF_FILE:-~/.aws/config}
+  CREDENTIAL_FILE="$HOME/.aws/credentials"
+  OKTA_CONFIG=${OKTA_CONFIG:-$HOME/.okta_aws_login_config}
+  SESSION_TIMEOUT=43200
+  ROLE_SESSION_TIMEOUT=3600
+  DEFAULT_ACCOUNT="default"
+  DEFAULT_ROLE="read"
+  AWS_PAGER=${AWS_PAGER:-cat}
+  default_profile=${AWS_PROFILE_ASSUME_ROLE:-default}
+
+  get_account_name $1
+
+  # echo_out $AWS_ACCOUNT_NAME
+  if [ $AWS_ACCOUNT_NAME ] && get_account_infos_from_config
+
+  # initiate SESSION_START, if not already done
+  NOW=$(date +"%s")
+  if [ -z "$AWS_SESSION_START" ] && AWS_SESSION_START=0
+  ABOUT_SESSION_TIMEOUT=$((SESSION_TIMEOUT - 200))
+  SESSION_TIMEOUT_DELTA=$((NOW - AWS_SESSION_START))
+
+  set_region
+  set_session_user
+
+  if [ use_okta_auth ]; then
+  : # noop
+  else 
+    set_mfa
+  fi
+
+
+
+}
