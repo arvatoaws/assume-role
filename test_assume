@@ -8,7 +8,7 @@ NC='\033[0m' # No Color
 
 use_okta_auth() {
   if [ -f -a "$OKTA_CONFIG" ]; then
-    SOURCE_PROFILE=$(aws configure get source_profile --profile $account_name)
+    SOURCE_PROFILE=$(aws configure get source_profile --profile $AWS_ACCOUNT_NAME)
     #echo $SOURCE_PROFILE
     ESCAPED_PROFILE=$(echo $SOURCE_PROFILE | sed 's;/;\\/;g')
     is_temporary=`cat $CREDENTIAL_FILE | sed -n "/^\[$ESCAPED_PROFILE\]/,/^\[.*\]/p" | grep "aws_session_token"`
@@ -28,6 +28,7 @@ check_account_input() {
   elif cat $CONF_FILE | grep -q "$account_id"; then
     echo_out "Account-ID: $1"
     export AWS_ACCOUNT_NAME=`tac $CONF_FILE | grep -A 20 "$1" | grep "\[profile" | sed "s/\]$//" | awk '{print $2 }' | head -n1`
+    echo_out $AWS_ACCOUNT_NAME
   else
     echo_out "Account wasn't found in config"
     return
@@ -53,11 +54,14 @@ get_account_name() {
   # ask for account
   else
     if [ -z "$AWS_ACCOUNT_NAME" ] && AWS_ACCOUNT_NAME=$DEFAULT_ACCOUNT
+
     echo -n "Assume Into Account [$AWS_ACCOUNT_NAME]: "
     read -r assume_input
     assume_input=${assume_input:-"$AWS_ACCOUNT_NAME"}
     check_account_input $assume_input
+    
   fi
+
   export AWS_ACCOUNT_NAME
 }
 
@@ -66,18 +70,18 @@ get_account_infos_from_config() {
   mfa_serial=$(aws configure get mfa_serial --profile $AWS_ACCOUNT_NAME)
   mfa_user=$(echo "$mfa_serial" | awk -F':' '{ print $6 }' | awk -F'/' '{ print $2 }')
   source_profile=$(aws configure get source_profile --profile $AWS_ACCOUNT_NAME)
-  account_id=`cat $CONF_FILE | sed -n "/^\[profile $account_name\]/,/^\[.*\]/p" | grep "role_arn" | awk '{ print $3 }' | awk -F':' '{ print $5 }'`
+  account_id=`cat $CONF_FILE | sed -n "/^\[profile $AWS_ACCOUNT_NAME\]/,/^\[.*\]/p" | grep "role_arn" | awk '{ print $3 }' | awk -F':' '{ print $5 }'`
   config_region=$(aws configure get region --profile $AWS_ACCOUNT_NAME)
   external_id=$(aws configure get external_id --profile $AWS_ACCOUNT_NAME)
 }
 
 set_mfa() {
-  if [ use_okta_auth ]; then
+  if use_okta_auth; then
     echo_out "TODO set_mfa"
   else
     if [ -z "$mfa_serial" ]; then
       # get MFA device attached to default creds
-      MFA_DEVICE=$(aws iam list-mfa-devices --user-name "$AWS_USERNAME" --query 'MFADevices[0].SerialNumber' --profile "${default_profile}" --output text)
+      MFA_DEVICE=$(aws iam list-mfa-devices --user-name "$AWS_USERNAME" --query 'MFADevices[0].SerialNumber' --profile "${source_profile}" --output text)
       MFA_DEVICE_STATUS=$?
       if [ $MFA_DEVICE_STATUS -ne 0 ]; then
         echo_out "aws iam list-mfa-devices error"
@@ -88,7 +92,7 @@ set_mfa() {
     fi
 
     if [ -z "$mfa_token_input" ] && [ -z "$YUBIKEY_ASSUME_KEY" ]; then
-      echo -n "MFA Token: "
+      echo -n "MFA Token [$MFA_DEVICE]: "
       read -r mfa_token
     elif [ -z "$mfa_token_input" ] && [ -z "$OUTPUT_TO_EVAL" ]; then
       YUBIKEY_MFA=$(ykman oath code "$YUBIKEY_ASSUME_KEY" | awk '{print $NF}')
@@ -101,7 +105,7 @@ set_mfa() {
 }
 
 set_session_user() {
-  if [ use_okta_auth ]; then
+  if use_okta_auth; then
     export session_user=$(cat $OKTA_CONFIG | grep okta_username | awk '{ print $3; }')
   elif [ $mfa_user ]; then
     export session_user=$mfa_user
@@ -158,7 +162,7 @@ test_assume() {
   DEFAULT_ACCOUNT="default"
   DEFAULT_ROLE="read"
   AWS_PAGER=${AWS_PAGER:-cat}
-  default_profile=${AWS_PROFILE_ASSUME_ROLE:-default}
+  source_profile=${AWS_PROFILE_ASSUME_ROLE:-default}
 
   get_account_name $1
 
@@ -174,7 +178,7 @@ test_assume() {
   set_region
   set_session_user
 
-  if [ use_okta_auth ]; then
+  if use_okta_auth; then
   : # noop
   else 
     set_mfa
